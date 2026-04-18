@@ -19,11 +19,20 @@ body {
     overflow: hidden;
 }
 
+#togglePassword {
+    background: none !important;
+    border: none !important;
+    padding: 0 10px !important;
+    margin: 0 !important;
+    min-width: unset !important;
+    box-shadow: none !important;
+}
+
 .lhsedulock {
-    height: 60px;
-    position: absolute;
-    left: 10px;
-    top: 10px;
+    position: static !important;
+    height: auto !important;
+    top: unset !important;
+    left: unset !important;
 }
 
 #name_logo {
