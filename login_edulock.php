@@ -231,20 +231,37 @@ if (isset($_POST['submit'])) {
                 })
                 .catch((error) => {
                     console.error("Auth error:", error);
-                    // Simplified error messages for users
-                    if (error.code === 'auth/user-not-found' ||
-                        error.code === 'auth/wrong-password' ||
-                        error.code === 'auth/invalid-login-credentials' ||
-                        error.code === 'auth/invalid-email') {
-                        showError('Invalid email or password.');
-                    } else if (error.code === 'auth/too-many-requests') {
-                        showError('Too many failed login attempts. Please try again later.');
-                    } else if (error.code === 'auth/network-request-failed') {
-                        showError('Network error. Please check your internet connection.');
-                    } else {
-                        // Generic error message instead of showing technical details
-                        showError('Login failed. Please try again.');
+
+                    switch (error.code) {
+                        case 'auth/user-not-found':
+                            showError('Invalid email.');
+                            break;
+
+                        case 'auth/wrong-password':
+                            showError('Invalid password.');
+                            break;
+
+                        case 'auth/invalid-email':
+                            showError('Invalid email format.');
+                            break;
+
+                        case 'auth/invalid-login-credentials':
+                            // Firebase sometimes returns this instead of wrong-password
+                            showError('Invalid email or password.');
+                            break;
+
+                        case 'auth/too-many-requests':
+                            showError('Too many failed login attempts. Please try again later.');
+                            break;
+
+                        case 'auth/network-request-failed':
+                            showError('Network error. Please check your internet connection.');
+                            break;
+
+                        default:
+                            showError('Login failed. Please try again.');
                     }
+
                     resetLoginButton();
                 });
         });
