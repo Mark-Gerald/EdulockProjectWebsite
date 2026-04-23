@@ -988,11 +988,24 @@ if (!isset($_SESSION['teacher_id'])) {
                     </div>
                 </div>
             </div>
-
         </div>
     </div>
 
-    <script src="scripts.js"></script>
+
+    <script src="js/state.js"></script>
+    <script src="js/firebase-init.js"></script>
+    <script src="js/dom.js"></script>
+    <script src="js/camera.js"></script>
+    <script src="js/qr.js"></script>
+    <script src="js/devices.js"></script>
+    <script src="js/block.js"></script>
+    <script src="js/device-ui.js"></script>
+    <script src="js/logs.js"></script>
+    <script src="js/status.js"></script>
+    <script src="js/firestore.js"></script>
+    <script src="js/lifecycle.js"></script>
+    <script src="js/main.js"></script>
+
 </body>
 
 </html>
