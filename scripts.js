@@ -56,6 +56,97 @@ function _findOfflineMatch(info) {
     return null;
 }
 
+// Identity keys for an arbitrary device-shaped object (used by the dedupe
+// pass to compare two rows in connectedDevices, regardless of which fields
+// happen to be populated on each).
+function _identityKeySet(d) {
+    return new Set(_identityKeysFor(d));
+}
+
+// Given the freshly-paired/active deviceId and its identity, remove any
+// other row in connectedDevices that shares an identity key with it.
+// This is the single chokepoint for cross-account / regenerated-QR dedupe.
+function _collapseDuplicatesAgainst(keepId, info) {
+    const keepKeys = new Set(_identityKeysFor(info));
+    if (keepKeys.size === 0) return;
+
+    for (let i = connectedDevices.length - 1; i >= 0; i--) {
+        const d = connectedDevices[i];
+        if (d.id === keepId) continue;
+
+        const dKeys = _identityKeysFor(d);
+        const hit   = dKeys.some(k => keepKeys.has(k));
+        if (!hit) continue;
+
+        // Tear down listeners + Firebase node for the loser.
+        try {
+            database.ref(`registered_devices/${d.id}`).off();
+            database.ref(`registered_devices/${d.id}/isBlocked`).off();
+            database.ref(`registered_devices/${d.id}/controllerConnected`).off();
+        } catch (e) { /* ignore */ }
+        database.ref(`registered_devices/${d.id}`).remove().catch(() => {});
+
+        connectedDevices.splice(i, 1);
+        delete deviceStatusMap[d.id];
+        _clearOfflineIdentity(d.id);
+        if (connectedDeviceId === d.id) connectedDeviceId = keepId;
+    }
+}
+
+// Periodic safety net: collapse any duplicates that slipped in via the
+// initial Firebase load (loadUserDataForDevices) before identity fields
+// were populated. Keeps the most-recently-online row of each identity.
+function dedupeConnectedDevicesByIdentity() {
+    if (connectedDevices.length < 2) return false;
+
+    const seen    = new Map(); // identityKey -> deviceId we're keeping
+    const dropIds = new Set();
+
+    // Prefer online rows over offline ones; among equals, prefer the one
+    // already chosen as connectedDeviceId, then the latest-added.
+    const ranked = connectedDevices.slice().sort((a, b) => {
+        const aOn = deviceStatusMap[a.id] === 'online' ? 1 : 0;
+        const bOn = deviceStatusMap[b.id] === 'online' ? 1 : 0;
+        if (aOn !== bOn) return bOn - aOn;
+        if (a.id === connectedDeviceId) return -1;
+        if (b.id === connectedDeviceId) return  1;
+        return 0;
+    });
+
+    for (const d of ranked) {
+        const keys = _identityKeysFor(d);
+        if (keys.length === 0) continue;
+
+        const conflict = keys.find(k => seen.has(k) && seen.get(k) !== d.id);
+        if (conflict) {
+            dropIds.add(d.id);
+        } else {
+            keys.forEach(k => seen.set(k, d.id));
+        }
+    }
+
+    if (dropIds.size === 0) return false;
+
+    dropIds.forEach(id => {
+        try {
+            database.ref(`registered_devices/${id}`).off();
+            database.ref(`registered_devices/${id}/isBlocked`).off();
+            database.ref(`registered_devices/${id}/controllerConnected`).off();
+        } catch (e) { /* ignore */ }
+        database.ref(`registered_devices/${id}`).remove().catch(() => {});
+
+        const idx = connectedDevices.findIndex(x => x.id === id);
+        if (idx !== -1) connectedDevices.splice(idx, 1);
+        delete deviceStatusMap[id];
+        _clearOfflineIdentity(id);
+        if (connectedDeviceId === id) {
+            connectedDeviceId = connectedDevices.length > 0 ? connectedDevices[0].id : null;
+        }
+    });
+
+    return true;
+}
+
 function _clearOfflineIdentity(deviceId) {
     const info = offlineDeviceInfo[deviceId];
     if (info) {
@@ -485,26 +576,17 @@ function connectToDevice(deviceId) {
                     );
                 }
 
-                // Cross-account dedupe — the same physical phone may appear in
-                // connectedDevices under a different account/name (e.g. user
-                // signed out, signed in with another account, generated a new
-                // QR). When the new entry has the same hardwareId, drop the
-                // old row so we never double-list the same device.
-                if (resolvedHardwareId) {
-                    for (let i = connectedDevices.length - 1; i >= 0; i--) {
-                        const d = connectedDevices[i];
-                        if (d.id !== deviceId && d.hardwareId === resolvedHardwareId) {
-                            // Remove the stale Firebase node too, so it doesn't
-                            // come back next refresh.
-                            database.ref(`registered_devices/${d.id}`).remove()
-                                .catch(() => { /* ignore */ });
-                            connectedDevices.splice(i, 1);
-                            delete deviceStatusMap[d.id];
-                            _clearOfflineIdentity(d.id);
-                            if (connectedDeviceId === d.id) connectedDeviceId = deviceId;
-                        }
-                    }
-                }
+                // Cross-account dedupe — the same physical phone may appear
+                // in connectedDevices under a different connection code (e.g.
+                // user regenerated a QR, signed out and back in, or the row
+                // was loaded from Firebase before we knew its hardwareId).
+                // We collapse on ANY shared identity: hardwareId, userId, or
+                // case-insensitive display name. The freshly-paired id wins.
+                _collapseDuplicatesAgainst(deviceId, {
+                    hardwareId:  resolvedHardwareId,
+                    userId:      resolvedUid,
+                    displayName: resolvedName
+                });
                 // ───────────────────────────────────────────────────────────
 
                 updateConnectionStatus(true);
@@ -908,6 +990,12 @@ function updateDeviceStatusUI(deviceId, status) {
 }
 
 function updateDeviceListUI() {
+    // Safety net: collapse any duplicate identities before painting.
+    if (dedupeConnectedDevicesByIdentity()) {
+        // We removed rows; recount + re-emit log if needed.
+        updateDeviceCounts();
+    }
+
     deviceListContainer.innerHTML = '';
 
     if (connectedDevices.length === 0) {
@@ -1111,44 +1199,15 @@ function switchActiveDevice(deviceId) {
 //  STATUS MONITORING
 // ═══════════════════════════════════════
 
-function startStatusMonitor() {
-    window.statusMonitorInterval = setInterval(() => {
-        if (connectedDevices.length === 0) return;
-        connectedDevices.forEach(device => {
-            database.ref(`registered_devices/${device.id}/controllerConnected`).once('value')
-                .then(snap => {
-                    const connected = snap.val();
-                    if ((connected === false || connected === null) && deviceStatusMap[device.id] === 'online') {
-                        markDeviceOffline(device.id);
-                    } else if (connected === true && deviceStatusMap[device.id] === 'offline') {
-                        markDeviceOnline(device.id);
-                    }
-                })
-                .catch(e => console.error('Status monitor error:', e));
-        });
-    }, 15000);
-}
-
-function startHeartbeat() {
-    window.heartbeatInterval = setInterval(() => {
-        if (connectedDevices.length === 0) return;
-        database.ref('.info/connected').once('value', snap => {
-            if (snap.val() !== true) return;
-            connectedDevices.forEach(device => {
-                database.ref(`registered_devices/${device.id}/controllerConnected`).once('value')
-                    .then(snap => {
-                        const connected = snap.val();
-                        if ((connected === false || connected === null) && deviceStatusMap[device.id] === 'online') {
-                            markDeviceOffline(device.id);
-                        } else if (connected === true && deviceStatusMap[device.id] === 'offline') {
-                            markDeviceOnline(device.id);
-                        }
-                    })
-                    .catch(e => console.error('Heartbeat error:', e));
-            });
-        });
-    }, 30000);
-}
+// NOTE: the legacy startStatusMonitor + startHeartbeat used to ALSO read
+// `controllerConnected` and revive offline devices when that flag was true.
+// That flag stays `true` for ~60s after a phone loses internet (Firebase's
+// onDisconnect grace period) — so they kept fighting the heartbeat monitor
+// and flipping cards back to "Online" 5 seconds after they correctly went
+// offline. Both functions are now no-ops; the heartbeat monitor and the
+// `setupPresenceDetection` change-listener are the single source of truth.
+function startStatusMonitor() { /* deprecated — see note above */ }
+function startHeartbeat()     { /* deprecated — see note above */ }
 
 // Detect offline based on STALE HEARTBEAT alone — no longer wait for
 // Firebase's onDisconnect to flip controllerConnected (which can take 30–60s
@@ -1266,6 +1325,9 @@ function loadUserDataForDevices() {
                     device.displayName = name;
                     device.userId = uid;
                     database.ref(`registered_devices/${device.id}`).update({ displayName: name });
+                    // Names just got resolved — that may have unlocked an
+                    // identity match against another row; collapse now.
+                    dedupeConnectedDevicesByIdentity();
                     updateDeviceListUI();
                     if (device.id === connectedDeviceId && deviceIdDisplay) {
                         deviceIdDisplay.textContent = name;
