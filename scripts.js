@@ -484,6 +484,27 @@ function connectToDevice(deviceId) {
                         'reconnected'
                     );
                 }
+
+                // Cross-account dedupe — the same physical phone may appear in
+                // connectedDevices under a different account/name (e.g. user
+                // signed out, signed in with another account, generated a new
+                // QR). When the new entry has the same hardwareId, drop the
+                // old row so we never double-list the same device.
+                if (resolvedHardwareId) {
+                    for (let i = connectedDevices.length - 1; i >= 0; i--) {
+                        const d = connectedDevices[i];
+                        if (d.id !== deviceId && d.hardwareId === resolvedHardwareId) {
+                            // Remove the stale Firebase node too, so it doesn't
+                            // come back next refresh.
+                            database.ref(`registered_devices/${d.id}`).remove()
+                                .catch(() => { /* ignore */ });
+                            connectedDevices.splice(i, 1);
+                            delete deviceStatusMap[d.id];
+                            _clearOfflineIdentity(d.id);
+                            if (connectedDeviceId === d.id) connectedDeviceId = deviceId;
+                        }
+                    }
+                }
                 // ───────────────────────────────────────────────────────────
 
                 updateConnectionStatus(true);
@@ -589,12 +610,9 @@ function setupPresenceDetection(deviceId) {
 
         if (isNowOffline && deviceStatusMap[deviceId] === 'online') {
             markDeviceOffline(deviceId);
-
-            // Auto-unblock if the device was blocked when it went offline
-            if (data && data.isBlocked === true) {
-                database.ref(`registered_devices/${deviceId}/isBlocked`).set(false)
-                    .catch(e => console.error('Unblock on disconnect error:', e));
-            }
+            // NOTE: we deliberately do NOT auto-unblock here. The teacher's
+            // block intent must persist across the student's offline period
+            // so the overlay re-applies the moment they regain signal.
         } else if (isNowOnline && deviceStatusMap[deviceId] === 'offline') {
             markDeviceOnline(deviceId);
         }
@@ -805,63 +823,62 @@ async function inferDisconnectReason(deviceId) {
     }
 }
 
-// Mark a device as offline — adds to the persistent offline set, REMOVES the
-// device from the paired list, and writes a reason into the disconnection log.
+// Mark a device as offline. The row STAYS in the paired list — it just flips
+// to an offline visual state. Keeping the row is what allows the heartbeat
+// monitor to revive it automatically when the phone comes back online,
+// without the user having to refresh the page.
 function markDeviceOffline(deviceId) {
-    if (deviceStatusMap[deviceId] !== 'online') return;
+    if (deviceStatusMap[deviceId] === 'offline') return;
 
     deviceStatusMap[deviceId] = 'offline';
     sessionOfflineSet.add(deviceId);
 
-    // Snapshot the device's identity BEFORE we remove it from the list,
-    // so we can both display a friendly name in the log and dedupe a
-    // future reconnection by the same user.
-    const device = connectedDevices.find(d => d.id === deviceId) || {};
+    const device = connectedDevices.find(d => d.id === deviceId);
+    if (device) device.online = false;
+
+    // Snapshot identity so we can log under the right name AND dedupe
+    // any future re-pairing under a different connection code.
     const snapshotInfo = {
-        hardwareId:  device.hardwareId  || null,
-        userId:      device.userId      || null,
-        displayName: device.displayName || device.name || null,
+        hardwareId:  device ? (device.hardwareId  || null) : null,
+        userId:      device ? (device.userId      || null) : null,
+        displayName: device ? (device.displayName || device.name || null) : null,
         removedAt:   Date.now()
     };
 
     if (deviceId === connectedDeviceId) updateConnectionStatus(false);
 
-    // Resolve the reason asynchronously, then log + render.
+    // Render immediately so the card flips to grey/offline within the same tick.
+    updateDeviceListUI();
+    updateDeviceCounts();
+
+    // Resolve the WHY asynchronously, then write the log entry.
     inferDisconnectReason(deviceId).then(reason => {
         snapshotInfo.reason = reason;
         _registerOfflineIdentity(deviceId, snapshotInfo);
 
         const displayName = snapshotInfo.displayName || `Device …${deviceId.substring(0, 8)}`;
         logConnectionEventNamed(displayName, Date.now(), 'disconnected', reason);
-
-        // Remove the device from the visible paired list.
-        const idx = connectedDevices.findIndex(d => d.id === deviceId);
-        if (idx !== -1) connectedDevices.splice(idx, 1);
-
-        // If we just removed the actively-selected device, switch focus.
-        if (connectedDeviceId === deviceId) {
-            if (connectedDevices.length > 0) {
-                switchActiveDevice(connectedDevices[0].id);
-            } else {
-                connectedDeviceId = null;
-                isDeviceBlocked   = false;
-                updateConnectionUI(false);
-            }
-        }
-
-        updateDeviceListUI();
-        updateDeviceCounts();
     });
 }
 
-// Mark a device as online — removes from the offline set so counter decrements
+// Mark a device as online — flips the row back to its normal styling and
+// logs a reconnect (only if it had previously gone offline).
 function markDeviceOnline(deviceId) {
+    const wasOffline = deviceStatusMap[deviceId] === 'offline';
+
     deviceStatusMap[deviceId] = 'online';
     _clearOfflineIdentity(deviceId);
-    updateDeviceStatusUI(deviceId, 'online');
-    logConnectionEvent(deviceId, Date.now(), 'connected');
+
+    const device = connectedDevices.find(d => d.id === deviceId);
+    if (device) device.online = true;
+
+    updateDeviceListUI();
     updateDeviceCounts();
     if (deviceId === connectedDeviceId) updateConnectionStatus(true);
+
+    if (wasOffline) {
+        logConnectionEvent(deviceId, Date.now(), 'reconnected');
+    }
 }
 
 function updateDeviceStatusUI(deviceId, status) {
@@ -1133,29 +1150,57 @@ function startHeartbeat() {
     }, 30000);
 }
 
+// Detect offline based on STALE HEARTBEAT alone — no longer wait for
+// Firebase's onDisconnect to flip controllerConnected (which can take 30–60s
+// or, on some networks, never fires fast enough to be useful).
+//
+// The Android foreground service writes lastHeartbeat every ~15s. If we
+// haven't seen one in 22s, treat the phone as offline. End-to-end the user
+// will see the card flip to grey within ~25s of pulling data / shutting down.
 function startHeartbeatMonitoring() {
+    const POLL_MS    = 5_000;
+    const STALE_MS   = 22_000;   // ~1.5 missed heartbeats — under 25 s end-to-end
+    const GRACE_MS   = 20_000;   // wait this long after a fresh pair before judging
+
     window.heartbeatMonitorInterval = setInterval(() => {
         if (connectedDevices.length === 0) return;
-        const now     = Date.now();
-        const timeout = 60000;
-        connectedDevices.forEach(device => {
-            database.ref(`registered_devices/${device.id}/lastHeartbeat`).once('value')
+        const now = Date.now();
+
+        connectedDevices.slice().forEach(device => {
+            database.ref(`registered_devices/${device.id}`).once('value')
                 .then(snap => {
-                    const last = snap.val();
-                    if (!last || (now - last) > timeout) {
-                        return database.ref(`registered_devices/${device.id}/controllerConnected`).once('value')
-                            .then(connSnap => {
-                                if ((connSnap.val() === false || connSnap.val() === null) && deviceStatusMap[device.id] === 'online') {
-                                    markDeviceOffline(device.id);
-                                }
-                            });
+                    if (!snap.exists()) {
+                        // Node was deleted (in-app Disconnect or teacher delete);
+                        // treat as offline.
+                        if (deviceStatusMap[device.id] === 'online') {
+                            markDeviceOffline(device.id);
+                        }
+                        return;
+                    }
+                    const data = snap.val() || {};
+                    const last = data.lastHeartbeat
+                              || data.lastPing
+                              || data.createdAt
+                              || 0;
+                    const age = last ? (now - last) : Infinity;
+
+                    // If we've never seen a heartbeat AND the row is brand new,
+                    // give the phone a moment to send its first one.
+                    if (!data.lastHeartbeat && data.createdAt && (now - data.createdAt) < GRACE_MS) {
+                        return;
+                    }
+
+                    if (age > STALE_MS) {
+                        if (deviceStatusMap[device.id] === 'online') {
+                            markDeviceOffline(device.id);
+                        }
                     } else if (deviceStatusMap[device.id] === 'offline') {
                         markDeviceOnline(device.id);
                     }
                 })
                 .catch(e => console.error('Heartbeat monitor error:', e));
         });
-    }, 30000);
+    }, POLL_MS);
 }
 
 function startPeriodicStatusCheck() {
