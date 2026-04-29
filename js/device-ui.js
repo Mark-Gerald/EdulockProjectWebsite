@@ -67,20 +67,32 @@ function updateDeviceListUI() {
     deviceListContainer.innerHTML = '';
 
     if (connectedDevices.length === 0) {
-        deviceListContainer.style.display = 'none';
-        const addBtn = document.getElementById('addDeviceButton');
-        if (addBtn) addBtn.style.display = 'none';
-        return;
-    }
+    deviceListContainer.style.display = 'none';
+    const addBtn = document.getElementById('addDeviceButton');
+    if (addBtn) addBtn.style.display = 'none';
+    const searchWrapper = document.getElementById('deviceSearchWrapper');
+    if (searchWrapper) searchWrapper.style.display = 'none';
+    return;
+}
 
     deviceListContainer.style.display = 'block';
-    const addBtn = document.getElementById('addDeviceButton');
-    if (addBtn) addBtn.style.display = 'flex';
+const addBtn = document.getElementById('addDeviceButton');
+if (addBtn) addBtn.style.display = 'flex';
 
-    const header = document.createElement('div');
-    header.className = 'device-list-header';
-    header.textContent = `Paired Devices (${connectedDevices.length})`;
-    deviceListContainer.appendChild(header);
+// Show/hide search bar based on device count
+const searchWrapper = document.getElementById('deviceSearchWrapper');
+if (searchWrapper) {
+    searchWrapper.style.display = connectedDevices.length > 0 ? 'block' : 'none';
+}
+
+// Clear search input when list is rebuilt so filter doesn't persist stale
+const searchInput = document.getElementById('deviceSearchInput');
+if (searchInput) searchInput.value = '';
+
+const header = document.createElement('div');
+header.className = 'device-list-header';
+header.textContent = `Paired Devices (${connectedDevices.length})`;
+deviceListContainer.appendChild(header);
 
     connectedDevices.forEach(device => {
         const item = document.createElement('div');
@@ -155,6 +167,16 @@ function updateDeviceListUI() {
         item.appendChild(statusDiv);
         item.appendChild(controls);
         deviceListContainer.appendChild(item);
+    });
+}
+
+function filterDeviceList(query) {
+    const items = document.querySelectorAll('#deviceListContainer .device-item');
+    const q = query.trim().toLowerCase();
+    items.forEach(item => {
+        const nameEl = item.querySelector('.device-name');
+        const name = nameEl ? nameEl.textContent.toLowerCase() : '';
+        item.style.display = (!q || name.includes(q)) ? '' : 'none';
     });
 }
 

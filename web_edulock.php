@@ -587,15 +587,16 @@ if (!isset($_SESSION['teacher_id'])) {
         }
 
         /* ─── Disconnection Log ─── */
-        .log-container {
-            max-height: 220px;
-            overflow-y: auto;
-            background: var(--bg-base);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 6px;
-            scrollbar-width: thin;
-            scrollbar-color: var(--bg-hover) transparent;
+        .log-reason {
+            margin-left: 8px;
+            font-size: 11px;
+            opacity: 0.7;
+            font-style: italic;
+            flex-shrink: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .log-empty {
@@ -810,6 +811,20 @@ if (!isset($_SESSION['teacher_id'])) {
         }
 
         /* ─── Responsive ─── */
+        @media (max-width: 500px) {
+            .log-entry {
+                flex-wrap: wrap;
+            }
+
+            .log-reason {
+                white-space: normal;
+                width: 100%;
+                margin-left: 0;
+                margin-top: 4px;
+            }
+        }
+
+
         @media (max-width: 860px) {
             .page-wrapper {
                 grid-template-columns: 1fr;
@@ -900,7 +915,16 @@ if (!isset($_SESSION['teacher_id'])) {
                             </button>
                         </div>
 
-                        <!-- Device List populated by JS -->
+                        <div id="deviceSearchWrapper" style="display:none; margin-bottom:12px;">
+                            <input
+                                type="text"
+                                id="deviceSearchInput"
+                                placeholder="🔍 Search by name..."
+                                oninput="filterDeviceList(this.value)"
+                                style="width:100%;padding:8px 12px;background:var(--bg-raised);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;outline:none;box-sizing:border-box;transition:border-color var(--transition);"
+                                onfocus="this.style.borderColor='var(--border-focus)'"
+                                onblur="this.style.borderColor='var(--border)'" />
+                        </div>
                         <div id="deviceListAnchor"></div>
 
                         <button id="addDeviceButton" class="btn btn-add-device" style="display: none;">

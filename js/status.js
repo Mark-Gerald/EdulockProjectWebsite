@@ -2,9 +2,8 @@ function startStatusMonitor() { }
 function startHeartbeat()     { }
 
 function startHeartbeatMonitoring() {
-    const POLL_MS  = 5_000;
-    const STALE_MS = 22_000;
-    const GRACE_MS = 20_000;
+    const POLL_MS  = 5_000;   // check every 5 seconds
+    const STALE_MS = 22_000;  // mark offline if no heartbeat for 22 seconds
 
     window.heartbeatMonitorInterval = setInterval(() => {
         if (connectedDevices.length === 0) return;
@@ -12,29 +11,25 @@ function startHeartbeatMonitoring() {
 
         connectedDevices.slice().forEach(device => {
             if (manuallyDisconnectedIds.has(device.id)) return;
-            database.ref(`registered_devices/${device.id}`).once('value')
+
+            // Only read lastHeartbeat — this must be written by the device app.
+            // We deliberately ignore lastPing (written by the controller) and
+            // createdAt, because those never go stale and hide real offline state.
+            database.ref(`registered_devices/${device.id}/lastHeartbeat`).once('value')
                 .then(snap => {
-                    if (!snap.exists()) {
-                        if (deviceStatusMap[device.id] === 'online') {
-                            markDeviceOffline(device.id);
-                        }
-                        return;
-                    }
-                    const data = snap.val() || {};
+                    // Guard again in case device was disconnected while awaiting
+                    if (manuallyDisconnectedIds.has(device.id)) return;
+                    if (!connectedDevices.some(d => d.id === device.id)) return;
 
-                    if (!data.lastHeartbeat && data.createdAt && (now - data.createdAt) < GRACE_MS) {
-                        return;
-                    }
-
-                    const last = data.lastHeartbeat || 0;
-                    const age = last ? (now - last) : Infinity;
+                    const last = snap.val() || 0;
+                    const age  = last ? (now - last) : Infinity;
 
                     if (age > STALE_MS) {
                         if (deviceStatusMap[device.id] === 'online') {
                             markDeviceOffline(device.id);
                         }
-                    } else if (deviceStatusMap[device.id] === 'offline') {
-                        if (data.controllerConnected === true) {
+                    } else {
+                        if (deviceStatusMap[device.id] === 'offline') {
                             markDeviceOnline(device.id);
                         }
                     }
@@ -55,18 +50,18 @@ async function inferDisconnectReason(deviceId) {
         const snap = await database.ref(`registered_devices/${deviceId}`).once('value');
         const data = snap.val();
 
-        if (!data) return 'app removed the device (user tapped Disconnect or app uninstalled)';
+        if (!data) return 'Student app removed or uninstalled';
 
         const now  = Date.now();
-        const last = data.lastHeartbeat || data.lastPing || 0;
+        const last = data.lastHeartbeat || 0;
         const gap  = last ? (now - last) : Infinity;
 
         if (gap > 60000) {
-            return 'no signal — internet/data turned off, or device shut down';
+            return 'Student disconnected — no signal (internet off or device shut down)';
         }
-        return 'app went to background or lost foreground connection';
+        return 'Student disconnected — app closed or lost connection';
     } catch (e) {
-        return 'connection lost';
+        return 'Student disconnected — reason unknown';
     }
 }
 

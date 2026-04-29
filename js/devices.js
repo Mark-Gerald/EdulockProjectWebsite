@@ -25,8 +25,8 @@ function connectToDevice(deviceId) {
                                         || null;
 
                 const matchInfo = {
-                    hardwareId: resolvedHardwareId,
-                    userId:     resolvedUid,
+                    hardwareId:  resolvedHardwareId,
+                    userId:      resolvedUid,
                     displayName: resolvedName
                 };
                 const previousOfflineId = _findOfflineMatch(matchInfo);
@@ -57,21 +57,21 @@ function connectToDevice(deviceId) {
                 const existingIdx = connectedDevices.findIndex(d => d.id === deviceId);
                 if (existingIdx === -1) {
                     connectedDevices.push({
-                        id: deviceId,
-                        name: resolvedName || `Device ${deviceId.substring(0, 8)}`,
+                        id:          deviceId,
+                        name:        resolvedName || `Device ${deviceId.substring(0, 8)}`,
                         displayName: resolvedName,
-                        isBlocked: deviceData.isBlocked || false,
-                        online: true,
-                        userId: resolvedUid,
-                        hardwareId: resolvedHardwareId
+                        isBlocked:   deviceData.isBlocked || false,
+                        online:      true,
+                        userId:      resolvedUid,
+                        hardwareId:  resolvedHardwareId
                     });
                 } else {
                     Object.assign(connectedDevices[existingIdx], {
-                        isBlocked: deviceData.isBlocked || false,
-                        online: true,
+                        isBlocked:   deviceData.isBlocked || false,
+                        online:      true,
                         displayName: resolvedName || connectedDevices[existingIdx].displayName,
-                        userId: resolvedUid || connectedDevices[existingIdx].userId,
-                        hardwareId: resolvedHardwareId || connectedDevices[existingIdx].hardwareId
+                        userId:      resolvedUid  || connectedDevices[existingIdx].userId,
+                        hardwareId:  resolvedHardwareId || connectedDevices[existingIdx].hardwareId
                     });
                 }
 
@@ -82,7 +82,6 @@ function connectToDevice(deviceId) {
                 _clearOfflineIdentity(deviceId);
 
                 setupDeviceListeners(deviceId);
-                setupPresenceDetection(deviceId);
                 updateDeviceListUI();
                 updateDeviceCounts();
 
@@ -99,6 +98,7 @@ function connectToDevice(deviceId) {
 }
 
 function setupDeviceListeners(deviceId) {
+    // Watch block state changes from Firebase in real time
     database.ref(`registered_devices/${deviceId}/isBlocked`).on('value', snap => {
         const blocked = snap.val();
         const idx = connectedDevices.findIndex(d => d.id === deviceId);
@@ -110,36 +110,16 @@ function setupDeviceListeners(deviceId) {
         updateDeviceListUI();
     });
 
-    const pingInterval = setInterval(() => {
-        if (!connectedDevices.some(d => d.id === deviceId)) {
-            clearInterval(pingInterval);
-            return;
-        }
-        database.ref(`registered_devices/${deviceId}/lastPing`)
-            .set(firebase.database.ServerValue.TIMESTAMP)
-            .catch(e => console.error('Ping write error:', e));
-    }, 10000);
-
-    deviceStatusMap[deviceId + '_pingInterval'] = pingInterval;
-}
-
-function setupPresenceDetection(deviceId) {
-    let initialFire = true;
-    database.ref(`registered_devices/${deviceId}/controllerConnected`).on('value', snap => {
-        if (initialFire) { initialFire = false; return}
-        if (manuallyDisconnectedIds.has(deviceId)) return;
-
-        const connected = snap.val();
-
-        if ((connected === false || connected === null) && deviceStatusMap[deviceId] === 'online') {
-            markDeviceOffline(deviceId);
-        }
-    });
+    // NOTE: We do NOT write lastPing here anymore.
+    // The controller writing lastPing was masking real device staleness —
+    // the heartbeat monitor in status.js reads lastHeartbeat (written by
+    // the device app) to detect genuine offline state.
 }
 
 function disconnectFromDevice() {
-    const ids = connectedDevices.map(d => d.id);
+    const ids      = connectedDevices.map(d => d.id);
     const promises = ids.map(id => disconnectSingleDevice(id));
+
     Promise.all(promises)
         .then(() => {
             for (const key in deviceStatusMap) {
@@ -169,15 +149,34 @@ function disconnectFromDevice() {
 }
 
 function disconnectSingleDevice(deviceId) {
+
+    const device = connectedDevices.find(d => d.id === deviceId);
+    const displayName = device
+        ? (device.displayName || device.name || `Device …${deviceId.substring(0, 8)}`)
+        : `Device …${deviceId.substring(0, 8)}`;
+
+    logConnectionEventNamed(
+        displayName,
+        Date.now(),
+        'disconnected',
+        'Disconnected by controller'   // ← shown in the log UI
+    );
+
     manuallyDisconnectedIds.add(deviceId);
 
+    // Remove all Firebase listeners for this device first,
+    // BEFORE we write controllerConnected:false, so the presence
+    // listener cannot fire and trigger a spurious offline→online flicker
     database.ref(`registered_devices/${deviceId}`).off();
     database.ref(`registered_devices/${deviceId}/isBlocked`).off();
     database.ref(`registered_devices/${deviceId}/controllerConnected`).off();
 
     ['_pingInterval', '_interval'].forEach(suffix => {
         const key = deviceId + suffix;
-        if (deviceStatusMap[key]) { clearInterval(deviceStatusMap[key]); delete deviceStatusMap[key]; }
+        if (deviceStatusMap[key]) {
+            clearInterval(deviceStatusMap[key]);
+            delete deviceStatusMap[key];
+        }
     });
 
     const idx = connectedDevices.findIndex(d => d.id === deviceId);
@@ -199,7 +198,7 @@ function disconnectSingleDevice(deviceId) {
 
     const updates = {
         [`registered_devices/${deviceId}/controllerConnected`]: false,
-        [`registered_devices/${deviceId}/isBlocked`]: false
+        [`registered_devices/${deviceId}/isBlocked`]:           false
     };
 
     return database.ref().update(updates)

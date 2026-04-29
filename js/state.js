@@ -10,6 +10,10 @@ let sessionOfflineSet = new Set();
 let offlineDeviceInfo = {};
 let offlineIdentityIndex = {};
 
+// Tracks devices being manually disconnected so presence/heartbeat
+// listeners ignore them during and after the disconnect process
+let manuallyDisconnectedIds = new Set();
+
 function _identityKeysFor(d) {
     const keys = [];
     if (d && d.hardwareId)  keys.push('hw:'  + d.hardwareId);
