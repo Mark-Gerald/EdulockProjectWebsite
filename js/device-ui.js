@@ -171,7 +171,8 @@ deviceListContainer.appendChild(header);
 }
 
 function filterDeviceList(query) {
-    const items = document.querySelectorAll('#deviceListContainer .device-item');
+    const items = document.querySelectorAll('#deviceList .device-item');
+    //                                       ^^^^^^^^^ corrected
     const q = query.trim().toLowerCase();
     items.forEach(item => {
         const nameEl = item.querySelector('.device-name');

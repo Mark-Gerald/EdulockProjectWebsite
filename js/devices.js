@@ -159,7 +159,7 @@ function disconnectSingleDevice(deviceId) {
         displayName,
         Date.now(),
         'disconnected',
-        'Disconnected by controller'   // ← shown in the log UI
+        'Disconnected by controller (admin action)'   // ← shown in the log UI
     );
 
     manuallyDisconnectedIds.add(deviceId);

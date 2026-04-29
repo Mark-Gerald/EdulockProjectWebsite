@@ -50,16 +50,16 @@ async function inferDisconnectReason(deviceId) {
         const snap = await database.ref(`registered_devices/${deviceId}`).once('value');
         const data = snap.val();
 
-        if (!data) return 'Student app removed or uninstalled';
+        if (!data) return 'Student disconnected — app removed or uninstalled';
 
         const now  = Date.now();
         const last = data.lastHeartbeat || 0;
         const gap  = last ? (now - last) : Infinity;
 
         if (gap > 60000) {
-            return 'Student disconnected — no signal (internet off or device shut down)';
+            return 'Student disconnected — no signal (device off or internet lost)';
         }
-        return 'Student disconnected — app closed or lost connection';
+        return 'Student disconnected — app closed or went to background';
     } catch (e) {
         return 'Student disconnected — reason unknown';
     }
@@ -74,25 +74,59 @@ function markDeviceOffline(deviceId) {
     const device = connectedDevices.find(d => d.id === deviceId);
     if (device) device.online = false;
 
+    // Capture whatever name we have right now
+    const knownName = device
+        ? (device.displayName || device.name || null)
+        : null;
+
     const snapshotInfo = {
-        hardwareId:  device ? (device.hardwareId  || null) : null,
-        userId:      device ? (device.userId      || null) : null,
-        displayName: device ? (device.displayName || device.name || null) : null,
+        hardwareId:  device ? (device.hardwareId || null) : null,
+        userId:      device ? (device.userId     || null) : null,
+        displayName: knownName,
         removedAt:   Date.now()
     };
 
     if (deviceId === connectedDeviceId) updateConnectionStatus(false);
-
     updateDeviceListUI();
     updateDeviceCounts();
 
-    inferDisconnectReason(deviceId).then(reason => {
-        snapshotInfo.reason = reason;
-        _registerOfflineIdentity(deviceId, snapshotInfo);
-
-        const displayName = snapshotInfo.displayName || `Device …${deviceId.substring(0, 8)}`;
-        logConnectionEventNamed(displayName, Date.now(), 'disconnected', reason);
+    // Resolve the best possible display name, then log
+    _resolveDisplayName(deviceId, device, knownName).then(resolvedName => {
+        inferDisconnectReason(deviceId).then(reason => {
+            snapshotInfo.displayName = resolvedName;
+            snapshotInfo.reason = reason;
+            _registerOfflineIdentity(deviceId, snapshotInfo);
+            logConnectionEventNamed(resolvedName, Date.now(), 'disconnected', reason);
+        });
     });
+}
+
+function _resolveDisplayName(deviceId, device, knownName) {
+    // If we already have a name, use it immediately
+    if (knownName) return Promise.resolve(knownName);
+
+    // Try to get UID from local device object
+    const uid = device
+        ? (device.userId || device.uid || device.userUid || device.user_id || device.ownerId || null)
+        : null;
+
+    if (uid && firestore) {
+        return firestore.collection('users').doc(uid).get()
+            .then(doc => {
+                if (!doc.exists) return `Device …${deviceId.substring(0, 8)}`;
+                const data = doc.data();
+                if (data.firstName && data.lastName) return `${data.firstName} ${data.lastName}`.trim();
+                if (data.firstName) return data.firstName;
+                if (data.name) return data.name;
+                return `Device …${deviceId.substring(0, 8)}`;
+            })
+            .catch(() => `Device …${deviceId.substring(0, 8)}`);
+    }
+
+    // Last resort: read displayName directly from RTDB
+    return database.ref(`registered_devices/${deviceId}/displayName`).once('value')
+        .then(snap => snap.val() || `Device …${deviceId.substring(0, 8)}`)
+        .catch(() => `Device …${deviceId.substring(0, 8)}`);
 }
 
 function markDeviceOnline(deviceId) {

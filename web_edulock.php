@@ -586,44 +586,45 @@ if (!isset($_SESSION['teacher_id'])) {
             color: var(--red-bright);
         }
 
-        /* ─── Disconnection Log ─── */
-        .log-reason {
-            margin-left: 8px;
-            font-size: 11px;
-            opacity: 0.7;
-            font-style: italic;
-            flex-shrink: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        /* ── Log container ──────────────────────────────────────── */
+        .log-container {
+            max-height: 280px;
+            overflow-y: auto;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 4px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--bg-hover) transparent;
         }
 
-        .log-empty {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 12px;
-            padding: 20px;
-        }
-
-        .log-entry {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 7px 10px;
+        /* ── Entry wrapper ──────────────────────────────────────── */
+        .log-collapsible {
             border-radius: var(--radius-sm);
             border-bottom: 1px solid var(--border);
-            font-size: 12px;
+            overflow: hidden;
         }
 
-        .log-entry:last-child {
+        .log-collapsible:last-child {
             border-bottom: none;
         }
 
-        .log-entry:hover {
+        /* ── Summary row ────────────────────────────────────────── */
+        .log-summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+            user-select: none;
+            transition: background var(--transition);
+        }
+
+        .log-summary:hover {
             background: var(--bg-raised);
         }
 
+        /* ── Timestamp ──────────────────────────────────────────── */
         .log-time {
             font-family: 'Courier New', monospace;
             color: var(--accent-light);
@@ -632,6 +633,7 @@ if (!isset($_SESSION['teacher_id'])) {
             font-size: 10px;
         }
 
+        /* ── Device name ────────────────────────────────────────── */
         .log-device {
             font-weight: 600;
             color: var(--text-primary);
@@ -640,8 +642,10 @@ if (!isset($_SESSION['teacher_id'])) {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font-size: 12px;
         }
 
+        /* ── Event badge ────────────────────────────────────────── */
         .log-event {
             flex-shrink: 0;
             font-weight: 600;
@@ -656,9 +660,96 @@ if (!isset($_SESSION['teacher_id'])) {
             color: var(--red-bright);
         }
 
+        .log-event.reconnected,
         .log-event.connected {
             background: var(--green-dim);
             color: var(--green-bright);
+        }
+
+        /* ── Chevron: rotates when open, pure CSS, no JS needed ─── */
+        .log-chevron {
+            flex-shrink: 0;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-left: auto;
+            transition: transform 0.25s ease;
+        }
+
+        .log-collapsible.log-open .log-chevron {
+            transform: rotate(180deg);
+        }
+
+        /* ── Detail panel: collapsed by default ─────────────────── */
+        .log-detail {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.25s ease, padding 0.25s ease;
+            background: var(--bg-raised);
+            border-top: 0 solid var(--border);
+            padding: 0 10px;
+        }
+
+        /* ── Detail panel: expanded state ──────────────────────── */
+        .log-collapsible.log-open .log-detail {
+            max-height: 300px;
+            padding: 8px 10px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* ── Detail rows ────────────────────────────────────────── */
+        .log-detail-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 5px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+        }
+
+        .log-detail-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .log-detail-label {
+            flex-shrink: 0;
+            width: 90px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .log-detail-label i {
+            margin-right: 5px;
+            color: var(--accent-light);
+            font-size: 10px;
+        }
+
+        .log-detail-value {
+            color: var(--text-primary);
+            font-weight: 500;
+            word-break: break-word;
+            flex: 1;
+        }
+
+        /* ── Empty state ────────────────────────────────────────── */
+        .log-empty {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            padding: 20px;
+        }
+
+        /* ── Mobile wrap ────────────────────────────────────────── */
+        @media (max-width: 500px) {
+            .log-summary {
+                flex-wrap: wrap;
+            }
+
+            .log-device {
+                width: 100%;
+                order: 3;
+            }
         }
 
         /* ─── Camera Controls ─── */
